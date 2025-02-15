@@ -12,14 +12,14 @@ pub async fn login(
     let db = db()?;
     let auth = auth()?;
 
-    let user: User = User::get_from_username(username, &db)
+    let user: UserRecord = UserRecord::get_from_username(&db, username)
         .await
         .ok_or_else(|| ServerFnError::new("User does not exist."))?;
 
-    let is_verified = user.verify(password, &db).await;
+    let is_verified = user.verify(&db, password).await;
 
     if is_verified {
-        auth.login_user(user.user_id as i64);
+        auth.login_user(user.id);
         auth.remember_user(remember.is_some());
         leptos_axum::redirect("/");
         return Ok(());
@@ -36,9 +36,10 @@ pub async fn signup(
     password_confirmation: String,
     remember: Option<String>,
 ) -> Result<(), ServerFnError> {
+    pub use bcrypt::{hash, DEFAULT_COST};
+    use surrealdb::RecordId;
     use self::ssr::*;
     use crate::user::ssr::*;
-    pub use bcrypt::{hash, DEFAULT_COST};
 
     let db = db()?;
     let auth = auth()?;
@@ -51,15 +52,17 @@ pub async fn signup(
 
     let password_hashed = hash(password, DEFAULT_COST).unwrap();
 
-    let id = surrealdb::sql::Id::rand().to_raw();
+    let id_key = surrealdb::sql::Id::rand().to_raw();
+    let id = RecordId::from_table_key(
+        "users",
+        id_key.clone(),
+    );
 
-    // Should probably drop and only use record ids
-    let user_id = rand::random::<i64>();    
-
-    let user: Result<Option<SurrealUser>, surrealdb::Error> = db
-        .create(("users", &id))
-        .content(SurrealUser {
-            user_id: user_id,
+    let user: Result<Option<SurrealUserRecord>, surrealdb::Error> = db
+        .create("users")
+        // TODO: Vefify we can provide the record id
+        .content(SurrealUserRecord {
+            id: id.clone(),
             anonymous: false,
             password: password_hashed,
             username: username.clone(),
@@ -69,19 +72,19 @@ pub async fn signup(
         .create("user_permissions")
         .content(SurrealPermissionTokens {
             token: "Category::View".to_string(),
-            user_id: user_id,
+            user_id: id.clone(),
         })
         .await;
     let _: Result<Option<SurrealPermissionTokens>, surrealdb::Error> = db
         .create("user_permissions")
         .content(SurrealPermissionTokens {
             token: "Category::Edit".to_string(),
-            user_id: user_id,
+            user_id: id.clone(),
         })
         .await;
 
     if user.is_ok() {
-        auth.login_user(user_id);
+        auth.login_user(id_key);
         auth.remember_user(remember.is_some());
         leptos_axum::redirect("/");
         Ok(())
@@ -111,17 +114,17 @@ pub mod ssr {
     use leptos::prelude::*;
     use surrealdb::{engine::any::Any, Surreal};
 
-    pub type SurrealAuthSession = AuthSession<User, i64, SessionSurrealPool<Any>, Surreal<Any>>;
+    pub type SurrealAuthSession = AuthSession<UserRecord, String, SessionSurrealPool<Any>, Surreal<Any>>;
 
     #[async_trait]
-    impl Authentication<User, i64, Surreal<Any>> for User {
+    impl Authentication<UserRecord, String, Surreal<Any>> for UserRecord {
         async fn load_user(
-            userid: i64,
-            pool: Option<&Surreal<Any>>,
-        ) -> Result<User, anyhow::Error> {
-            let pool = pool.unwrap();
+            user_id: String,
+            db: Option<&Surreal<Any>>,
+        ) -> Result<UserRecord, anyhow::Error> {
+            let db = db.unwrap();
 
-            User::get_user(userid, pool)
+            UserRecord::get_user(db, user_id)
                 .await
                 .ok_or_else(|| anyhow::anyhow!("Could not load user"))
         }
@@ -140,8 +143,8 @@ pub mod ssr {
     }
 
     #[async_trait]
-    impl HasPermission<Surreal<Any>> for User {
-        async fn has(&self, perm: &str, _pool: &Option<&Surreal<Any>>) -> bool {
+    impl HasPermission<Surreal<Any>> for UserRecord {
+        async fn has(&self, perm: &str, _db: &Option<&Surreal<Any>>) -> bool {
             self.permissions.contains(perm)
         }
     }

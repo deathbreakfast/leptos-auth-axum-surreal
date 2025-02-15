@@ -34,10 +34,12 @@ pub async fn bump_count(bump_count: i32) -> Result<(), ServerFnError> {
                 "User does not have permission to update counter, make sure you are signed in.",
             ));
         }
+        let count = Counter::get(&db).await.unwrap_or_default();
+        count.add(&db, bump_count).await;
+        return Ok(());
     }
-    let count = Counter::get(&db).await.unwrap_or_default();
-    count.add(&db, bump_count).await;
-    Ok(())
+
+    Err(ServerFnError::new("User not found, make sure you are signed in."))
 }
 
 #[cfg(feature = "ssr")]
@@ -47,8 +49,8 @@ pub mod ssr {
     use crate::counter::Counter;
 
     impl Counter {
-        pub async fn get(pool: &Surreal<Any>) -> Option<Self> {
-            let count: Option<Counter> = pool
+        pub async fn get(db: &Surreal<Any>) -> Option<Self> {
+            let count: Option<Counter> = db
                 .query("SELECT count FROM counters where name = $counter_name")
                 .bind(("counter_name", "total"))
                 .await
@@ -58,16 +60,16 @@ pub mod ssr {
             count
         }
 
-        pub async fn add(self: &Self, pool: &Surreal<Any>, count: i32) {
-            pool.query("UPDATE counters SET count = count + $count WHERE name = $counter_name")
+        pub async fn add(self: &Self, db: &Surreal<Any>, count: i32) {
+            db.query("UPDATE counters SET count = count + $count WHERE name = $counter_name")
                 .bind(("count", count))
                 .bind(("counter_name", "total"))
                 .await
                 .unwrap();
         }
 
-        pub async fn create_counter_table(pool: &Surreal<Any>) {
-            pool.query(
+        pub async fn create_counter_table(db: &Surreal<Any>) {
+            db.query(
                 "   DEFINE TABLE counters SCHEMAFULL; 
                 DEFINE FIELD name ON TABLE counters TYPE string;
                 DEFINE FIELD count ON TABLE counters TYPE int;
@@ -76,9 +78,9 @@ pub mod ssr {
             .await
             .unwrap();
 
-            let counter: Option<Counter> = Counter::get(pool).await;
+            let counter: Option<Counter> = Counter::get(db).await;
             if counter.is_none() {
-                let _: Result<Option<SurrealCounter>, surrealdb::Error> = pool
+                let _: Result<Option<SurrealCounter>, surrealdb::Error> = db
                     .create("counters")
                     .content(SurrealCounter {
                         name: "total".to_string(),

@@ -10,7 +10,6 @@ pub mod ssr {
         http::Request,
         response::{IntoResponse, Response},
     };
-    use axum_session_surreal::SessionSurrealPool;
     use leptos::prelude::{provide_context, LeptosOptions};
     use leptos_axum::handle_server_fns_with_context;
     use leptos_auth_axum_surreal::app::*;
@@ -20,7 +19,7 @@ pub mod ssr {
         Surreal,
     };
 
-    use crate::user::User;
+    use crate::auth::ssr::SurrealAuthSession;
 
     #[derive(FromRef, Debug, Clone)]
     pub struct AppState {
@@ -31,12 +30,7 @@ pub mod ssr {
     }
 
     pub async fn leptos_routes_handler(
-        auth_session: axum_session_auth::AuthSession<
-            User,
-            i64,
-            SessionSurrealPool<Any>,
-            Surreal<Any>,
-        >,
+        auth_session: SurrealAuthSession,
         state: State<AppState>,
         req: Request<AxumBody>,
     ) -> Response {
@@ -54,12 +48,7 @@ pub mod ssr {
 
     pub async fn server_fn_handler(
         State(app_state): State<AppState>,
-        auth_session: axum_session_auth::AuthSession<
-            User,
-            i64,
-            SessionSurrealPool<Any>,
-            Surreal<Any>,
-        >,
+        auth_session: SurrealAuthSession,
         _path: Path<String>,
         request: Request<AxumBody>,
     ) -> impl IntoResponse {
@@ -91,7 +80,7 @@ async fn main() {
         opt::auth::Root,
         Surreal,
     };
-    use crate::user::User;
+    use crate::user::UserRecord;
     use crate::counter::Counter;
 
     let db = connect("ws://localhost:8000").await.unwrap();
@@ -109,8 +98,8 @@ async fn main() {
 
     //This Defaults as normal Cookies.
     //To enable Private cookies for integrity, and authenticity please check the next Example.
-    let session_config = SessionConfig::default().with_table_name("test_table");
-    let auth_config = AuthConfig::<i64>::default().with_anonymous_user_id(Some(1));
+    let session_config = SessionConfig::default().with_table_name("sessions");
+    let auth_config = AuthConfig::<String>::default().with_anonymous_user_id(Some("1".into()));
 
     // create SessionStore and initiate the database tables
     let session_store: SessionStore<SessionSurrealPool<Any>> =
@@ -118,7 +107,7 @@ async fn main() {
             .await
             .unwrap();
 
-    User::create_user_tables(&db).await;
+    UserRecord::create_user_tables(&db).await;
     Counter::create_counter_table(&db).await;
 
     let conf = get_configuration(None).unwrap();
@@ -140,7 +129,7 @@ async fn main() {
         )
         .leptos_routes_with_handler(routes, get(leptos_routes_handler))
         .layer(
-            AuthSessionLayer::<User, i64, SessionSurrealPool<Any>, Surreal<Any>>::new(Some(db))
+            AuthSessionLayer::<UserRecord, String, SessionSurrealPool<Any>, Surreal<Any>>::new(Some(db))
                 .with_config(auth_config),
         )
         .layer(SessionLayer::new(session_store))

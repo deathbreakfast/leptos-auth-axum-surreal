@@ -122,7 +122,7 @@ pub fn App() -> impl IntoView {
 
 /// Renders the home page of your application.
 #[component]
-fn HomePage(user: Resource<Result<Option<User>, ServerFnError>>) -> impl IntoView {
+fn HomePage(user: Resource<Result<Option<UserRecord>, ServerFnError>>) -> impl IntoView {
     let bump_count = ServerAction::<BumpCount>::new();
 
     let counter_resource = leptos::prelude::Resource::new(

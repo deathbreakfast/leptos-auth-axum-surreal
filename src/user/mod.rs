@@ -1,24 +1,23 @@
+use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use leptos::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {
-    pub user_id: i64,
+pub struct UserRecord {
+    pub id: String,
     pub anonymous: bool,
     pub username: String,
     #[serde(skip)]
     pub permissions: HashSet<String>,
 }
 
-impl Default for User {
+impl Default for UserRecord {
     fn default() -> Self {
         let mut permissions = HashSet::new();
-
         permissions.insert("Category::View".to_owned());
 
         Self {
-            user_id: 1,
+            id: "1".into(),
             anonymous: true,
             username: "Guest".into(),
             permissions,
@@ -27,7 +26,7 @@ impl Default for User {
 }
 
 #[server(CurrentUser, "/api")]
-pub async fn current_user() -> Result<Option<User>, ServerFnError> {
+pub async fn current_user() -> Result<Option<UserRecord>, ServerFnError> {
     use crate::auth::ssr::*;
     let auth = auth();
     if auth.is_err() {
@@ -38,11 +37,11 @@ pub async fn current_user() -> Result<Option<User>, ServerFnError> {
 
 #[cfg(feature = "ssr")]
 pub mod ssr {
-    use crate::user::User;
+    use crate::user::UserRecord;
+    use bcrypt::{hash, DEFAULT_COST};
     use serde::{Deserialize, Serialize};
     use std::collections::HashSet;
-    use surrealdb::{engine::any::Any, Surreal};
-    use bcrypt::{hash, DEFAULT_COST};
+    use surrealdb::{engine::any::Any, RecordId, Surreal};
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
     pub struct PermissionTokens {
@@ -52,23 +51,22 @@ pub mod ssr {
     #[derive(Debug, Serialize, Deserialize, Clone)]
     pub struct SurrealPermissionTokens {
         pub token: String,
-        pub user_id: i64,
+        pub user_id: RecordId,
     }
 
-    impl User {
+    impl UserRecord {
         pub fn has_permission(&self, token: &str) -> bool {
             self.permissions.contains(token)
         }
 
-        pub async fn verify(&self, password: String, pool: &Surreal<Any>) -> bool {
-            let surreal_user: Option<SurrealUser> = pool
-                .query("SELECT username, password, user_id, anonymous FROM users where username = $username")
+        pub async fn verify(&self, db: &Surreal<Any>, password: String) -> bool {
+            let surreal_user: Option<SurrealUserRecord> = db
+                .query("SELECT id, username, password, anonymous FROM users where username = $username")
                 .bind(("username", self.username.clone()))
                 .await
                 .unwrap()
                 .take(0)
                 .unwrap();
-            
 
             if let Some(surreal_user) = surreal_user {
                 if bcrypt::verify(password, &surreal_user.password).unwrap() {
@@ -78,23 +76,17 @@ pub mod ssr {
             false
         }
 
-        pub async fn get_user(id: i64, pool: &Surreal<Any>) -> Option<Self> {
-            let surreal_user: Option<SurrealUser> = pool
-                .query("SELECT username, password, user_id, anonymous FROM users where user_id = $user_id")
-                .bind(("user_id", id))
-                .await
-                .unwrap()
-                .take(0)
-                .unwrap();
-
+        pub async fn get_user(db: &Surreal<Any>, user_id: String) -> Option<Self> {
+            let surreal_user: Option<SurrealUserRecord> =
+                db.select(("users", user_id.clone())).await.unwrap();
             if surreal_user.is_none() {
                 return None;
             }
 
             //lets just get all the tokens the user can use, we will only use the full permissions if modifing them.
-            let surreal_user_perms: Vec<PermissionTokens> = pool
+            let surreal_user_perms: Vec<PermissionTokens> = db
                 .query("SELECT token FROM user_permissions where user_id = $user_id")
-                .bind(("user_id", id))
+                .bind(("user_id", RecordId::from_table_key("users", user_id)))
                 .await
                 .unwrap()
                 .take(0)
@@ -103,23 +95,23 @@ pub mod ssr {
             Some(surreal_user.unwrap().into_user(Some(surreal_user_perms)))
         }
 
-        pub async fn get_from_username(username: String, pool: &Surreal<Any>) -> Option<Self> {
-            let surreal_user: Option<SurrealUser> = pool
-                .query("SELECT username, password, user_id, anonymous FROM users where username = $username")
+        pub async fn get_from_username(db: &Surreal<Any>, username: String) -> Option<Self> {
+            let surreal_user: Option<SurrealUserRecord> = db
+                .query("SELECT id, username, password, anonymous FROM users where username = $username")
                 .bind(("username", username.clone()))
                 .await
                 .unwrap()
                 .take(0)
                 .unwrap();
-            
+
             if surreal_user.is_none() {
                 return None;
             }
 
             //lets just get all the tokens the user can use, we will only use the full permissions if modifing them.
-            let surreal_user_perms: Vec<PermissionTokens> = pool
+            let surreal_user_perms: Vec<PermissionTokens> = db
                 .query("SELECT token FROM user_permissions where user_id = $user_id")
-                .bind(("user_id", surreal_user.as_ref().unwrap().user_id))
+                .bind(("user_id", surreal_user.as_ref().unwrap().id.clone()))
                 .await
                 .unwrap()
                 .take(0)
@@ -128,72 +120,73 @@ pub mod ssr {
             Some(surreal_user.unwrap().into_user(Some(surreal_user_perms)))
         }
 
-        pub async fn create_user_tables(pool: &Surreal<Any>) {
-            pool.query(
+        pub async fn create_user_tables(db: &Surreal<Any>) {
+            db.query(
                 "   DEFINE TABLE users SCHEMAFULL; 
                 DEFINE FIELD username ON TABLE users TYPE string;
                 DEFINE FIELD password ON TABLE users TYPE string;
                 DEFINE FIELD anonymous ON TABLE users TYPE bool;
-                DEFINE FIELD user_id ON TABLE users TYPE int;
             ",
             )
             .await
             .unwrap();
 
-            pool.query(
+            db.query(
                 "   DEFINE TABLE user_permissions SCHEMAFULL; 
                 DEFINE FIELD token ON TABLE user_permissions TYPE string;
-                DEFINE FIELD user_id ON TABLE user_permissions TYPE int;
+                DEFINE FIELD user_id ON TABLE user_permissions TYPE record;
             ",
             )
             .await
             .unwrap();
-            
+
             // Check if guest user exists, if not create it.
-            let user: Option<User> = User::get_user(1, pool).await;
+            let user_id = RecordId::from_table_key::<&str, String>("users", "1".into());
+            let user: Option<UserRecord> = UserRecord::get_user(db, "1".into()).await;
             if user.is_none() {
-                let _: Result<Option<SurrealUser>, surrealdb::Error> = pool
+                let _: Result<Option<SurrealUserRecord>, surrealdb::Error> = db
                     .create("users")
-                    .content(SurrealUser {
-                        user_id: 1,
+                    .content(SurrealUserRecord {
+                        id: user_id.clone(),
                         anonymous: true,
                         password: hash("".to_string(), DEFAULT_COST).unwrap(),
                         username: "Guest".to_string(),
                     })
                     .await;
-                let _: Result<Option<SurrealPermissionTokens>, surrealdb::Error> = pool
+                let _: Result<Option<SurrealPermissionTokens>, surrealdb::Error> = db
                     .create("user_permissions")
                     .content(SurrealPermissionTokens {
                         token: "Category::View".to_string(),
-                        user_id: 1,
+                        user_id: user_id,
                     })
                     .await;
             }
 
             // Check if default test user exists, if not create it.
-            let user: Option<User> = User::get_user(2, pool).await;
+            let user_id = RecordId::from_table_key::<&str, String>("users", "2".into());
+            let user: Option<UserRecord> = UserRecord::get_user(db, "2".into()).await;
             if user.is_none() {
-                let _: Result<Option<SurrealUser>, surrealdb::Error> = pool
+                let _: Result<Option<SurrealUserRecord>, surrealdb::Error> = db
                     .create("users")
-                    .content(SurrealUser {
-                        user_id: 2,
+                    .content(SurrealUserRecord {
+                        id: user_id.clone(),
                         anonymous: false,
                         password: hash("password".to_string(), DEFAULT_COST).unwrap(),
                         username: "Test".to_string(),
                     })
                     .await;
-                let _: Result<Option<SurrealPermissionTokens>, surrealdb::Error> = pool
+                let _: Result<Option<SurrealPermissionTokens>, surrealdb::Error> = db
                     .create("user_permissions")
                     .content(SurrealPermissionTokens {
                         token: "Category::View".to_string(),
-                        user_id: 2,
+                        user_id: user_id.clone(),
                     })
                     .await;
-                let _: Result<Option<SurrealPermissionTokens>, surrealdb::Error> = pool
+                let _: Result<Option<SurrealPermissionTokens>, surrealdb::Error> = db
                     .create("user_permissions")
                     .content(SurrealPermissionTokens {
                         token: "Category::Edit".to_string(),
-                        user_id: 2,
+                        user_id: user_id,
                     })
                     .await;
             }
@@ -201,17 +194,24 @@ pub mod ssr {
     }
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
-    pub struct SurrealUser {
-        pub user_id: i64,
+    pub struct SurrealUserRecord {
+        pub id: RecordId,
         pub anonymous: bool,
         pub password: String,
         pub username: String,
     }
 
-    impl SurrealUser {
-        pub fn into_user(self, surreal_user_perms: Option<Vec<PermissionTokens>>) -> User {
-            User {
-                user_id: self.user_id,
+    impl SurrealUserRecord {
+        pub fn into_user(
+            self,
+            surreal_user_perms: Option<Vec<PermissionTokens>>,
+        ) -> UserRecord {
+            let id = self.id.key().to_string();
+            let mut id = id.chars();
+            id.next();
+            id.next_back();
+            UserRecord {
+                id: id.as_str().to_string(),
                 anonymous: self.anonymous,
                 username: self.username,
                 permissions: if let Some(user_perms) = surreal_user_perms {

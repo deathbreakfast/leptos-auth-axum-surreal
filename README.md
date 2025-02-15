@@ -3,9 +3,9 @@
     <img src="https://raw.githubusercontent.com/leptos-rs/leptos/main/docs/logos/Leptos_logo_RGB.svg" alt="Leptos Logo">
 </picture>
 
-# Leptos Axum Starter Template
+# Leptos Auth Axum Surreal Starter Template
 
-This is a template for use with the [Leptos](https://github.com/leptos-rs/leptos) web framework and the [cargo-leptos](https://github.com/akesson/cargo-leptos) tool using [Axum](https://github.com/tokio-rs/axum).
+This is a template for use with the [Leptos](https://github.com/leptos-rs/leptos) web framework and the [cargo-leptos](https://github.com/akesson/cargo-leptos) tool using [Axum](https://github.com/tokio-rs/axum). It comes set up with simple authorization and stores data in [SurrealDB](https://surrealdb.com/).
 
 ## Creating your template repo
 
@@ -17,7 +17,7 @@ cargo install cargo-leptos --locked
 
 Then run
 ```bash
-cargo leptos new --git https://github.com/leptos-rs/start-axum-0.7
+cargo leptos new --git https://github.com/deathbreakfast/leptos-auth-axum-surreal
 ```
 
 to generate a new project template.
@@ -31,6 +31,10 @@ Feel free to explore the project structure, but the best place to start with you
 Addtionally, Cargo.toml may need updating as new versions of the dependencies are released, especially if things are not working after a `cargo update`.
 
 ## Running your project
+
+To run the project you'll need to have SurrelDB running. Easiest way is to use [docker](https://surrealdb.com/docs/surrealdb/installation/running/docker).
+
+Once the docker contaier is up, run
 
 ```bash
 cargo leptos watch
